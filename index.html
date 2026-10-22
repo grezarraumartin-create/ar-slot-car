@@ -8,6 +8,12 @@
   </head>
   <body>
     <a-scene>
+      <a-entity camera look-controls wasd-controls
+          position="0 1.6 0">
+        <a-cursor color="#26A9CB"></a-cursor>
+      </a-entity>
+      
+      <a-scene cursor="rayOrigin: mouse"></a-scene>
       <a-assets>
         <a-asset-item id="auto" src="activos/auto.glb"></a-asset-item>
       </a-assets>
