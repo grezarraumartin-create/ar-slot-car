@@ -17,6 +17,8 @@
       <a-assets>
         <a-asset-item id="auto" src="activos/auto.glb"></a-asset-item>
         <a-asset-item id="pista" src="activos/pista.glb"></a-asset-item>
+        <audio id="campana" src="activos/campana.mp3"></audio>
+        <audio id="aceleracion" src="activos/aceleracion.mp3"></audio>
       </a-assets>
 
       <a-entity gltf-model="#auto" position="3 1 -3" rotation="0 0 0"
@@ -38,7 +40,9 @@
                           dur: 200; startEvents: mouseleave"
       animation__click="property: rotation;
                         from: 0 0 0; to: 0 360 0;
-                        dur: 1000; startEvents: click">
+                        dur: 1000; startEvents: click"
+      sound="src: #campana; on: click;
+             positional: true">
       </a-box>
 
       <a-sphere position="0 1.25 -5" radius="1.25" color="#c94024"></a-sphere>
