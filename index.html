@@ -184,7 +184,7 @@
       friction:     { type: 'number',  default: 1.2 },  // desaceleración al soltar
       speedScale:   { type: 'number',  default: 30 },   // factor para mostrar "km/h"
 
-      trackShape:   { type: 'string',  default: 'oval', oneOf: ['oval', 'custom'] },
+      trackShape:   { type: 'string',  default: 'custom', oneOf: ['oval', 'custom'] },
       straight:     { type: 'number',  default: 2.0 },  // largo de rectas (óvalo)
       radius:       { type: 'number',  default: 0.8 },  // radio de curvas (óvalo)
       // Puntos propios "x,z; x,z; x,z..." (mínimo 4), usados si trackShape = custom
