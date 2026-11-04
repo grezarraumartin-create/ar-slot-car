@@ -156,7 +156,7 @@
           radius: 0.8;
           heightOffset: 0.02;
           modelYaw: 0;
-          debug: false">
+          debug: true">
       </a-entity>
     </a-entity>
 
@@ -193,7 +193,7 @@
       heightOffset: { type: 'number',  default: 0.02 }, // altura del auto sobre la pista (eje Y)
       modelYaw:     { type: 'number',  default: 0 },    // corrección de orientación del modelo (grados)
       reverse:      { type: 'boolean', default: false },// recorrer la pista en sentido contrario
-      debug:        { type: 'boolean', default: false } // dibuja la trayectoria
+      debug:        { type: 'boolean', default: true } // dibuja la trayectoria
     },
 
     init: function () {
