@@ -154,7 +154,7 @@
       <a-entity id="car" gltf-model="#auto"
         slot-car-controller="
           lane: 0; hudLaps: #lap-you;
-          maxSpeed: 40; acceleration: 30; friction: 22; speedScale: 4;
+          maxSpeed: 40; acceleration: 30; friction: 35; speedScale: 4;
           heightOffset: 0; modelYaw: 0; clockwise: true; debug: false">
       </a-entity>
 
@@ -162,7 +162,7 @@
       <a-entity id="rival" gltf-model="#auto"
         slot-car-controller="
           lane: 1; hudLaps: #lap-rival; ai: true; aiSkill: 0.8; tint: #4aa3ff;
-          maxSpeed: 40; acceleration: 30; friction: 22;
+          maxSpeed: 40; acceleration: 30; friction: 35;
           heightOffset: 0; modelYaw: 0; clockwise: true">
       </a-entity>
     </a-entity>
@@ -345,7 +345,7 @@
 
       maxSpeed:     { type: 'number',   default: 40 },         // unidades de la pista / s
       acceleration: { type: 'number',   default: 30 },         // unidades / s²
-      friction:     { type: 'number',   default: 22 },         // desaceleración al soltar
+      friction:     { type: 'number',   default: 35 },         // desaceleración al soltar
       speedScale:   { type: 'number',   default: 4 },          // factor para mostrar "km/h"
 
       heightOffset: { type: 'number',   default: 0 },          // altura extra sobre la ranura
