@@ -211,7 +211,7 @@
       <a-entity id="car" gltf-model="#auto"
         slot-car-controller="
           lane: 0; label: Tú; hudLaps: #lap-you;
-          maxSpeed: 40; acceleration: 30; friction: 22; speedScale: 4;
+          maxSpeed: 80; acceleration: 75; friction: 70; speedScale: 4;
           grip: 125; curveRadius: 15; penalty: 3; gravity: 90;
           heightOffset: 0; modelYaw: 0; clockwise: true; debug: false">
       </a-entity>
@@ -220,7 +220,7 @@
       <a-entity id="rival" gltf-model="#auto"
         slot-car-controller="
           lane: 1; label: Rival; hudLaps: #lap-rival; ai: true; aiSkill: 0.8; tint: #4aa3ff;
-          maxSpeed: 40; acceleration: 30; friction: 22;
+          maxSpeed: 80; acceleration: 75; friction: 70;
           grip: 125; curveRadius: 15;
           heightOffset: 0; modelYaw: 0; clockwise: true">
       </a-entity>
@@ -461,9 +461,9 @@
       clockwise:    { type: 'boolean',  default: true },       // sentido de la carrera (visto desde arriba)
       label:        { type: 'string',   default: 'Tú' },       // nombre en los resultados
 
-      maxSpeed:     { type: 'number',   default: 40 },         // unidades de la pista / s
-      acceleration: { type: 'number',   default: 30 },         // unidades / s²
-      friction:     { type: 'number',   default: 22 },         // desaceleración al soltar
+      maxSpeed:     { type: 'number',   default: 80 },         // unidades de la pista / s
+      acceleration: { type: 'number',   default: 75 },         // unidades / s²
+      friction:     { type: 'number',   default: 70 },         // desaceleración al soltar
       speedScale:   { type: 'number',   default: 4 },          // factor para mostrar "km/h"
 
       grip:         { type: 'number',   default: 125 },        // agarre: velocidad segura = √(grip × radio)
