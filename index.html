@@ -212,7 +212,7 @@
         slot-car-controller="
           lane: 0; label: Tú; hudLaps: #lap-you;
           maxSpeed: 80; acceleration: 75; friction: 70; speedScale: 4;
-          grip: 1000; curveRadius: 15; penalty: 1; gravity: 90;
+          grip: 1500; curveRadius: 15; penalty: 1; gravity: 90;
           heightOffset: 0; modelYaw: 0; clockwise: true; debug: false">
       </a-entity>
 
@@ -221,7 +221,7 @@
         slot-car-controller="
           lane: 1; label: Rival; hudLaps: #lap-rival; ai: true; aiSkill: 0.8; tint: #4aa3ff;
           maxSpeed: 80; acceleration: 75; friction: 70;
-          grip: 1000; curveRadius: 15;
+          grip: 1500; curveRadius: 15;
           heightOffset: 0; modelYaw: 0; clockwise: true">
       </a-entity>
     </a-entity>
@@ -466,7 +466,7 @@
       friction:     { type: 'number',   default: 70 },         // desaceleración al soltar
       speedScale:   { type: 'number',   default: 4 },          // factor para mostrar "km/h"
 
-      grip:         { type: 'number',   default: 1000 },        // agarre: velocidad segura = √(grip × radio)
+      grip:         { type: 'number',   default: 1500 },        // agarre: velocidad segura = √(grip × radio)
       curveRadius:  { type: 'number',   default: 15 },         // radios menores a esto son "curva"
       penalty:      { type: 'number',   default: 1 },          // segundos inhabilitado tras salirse
       gravity:      { type: 'number',   default: 90 },         // gravedad del vuelo (unidades/s²)
