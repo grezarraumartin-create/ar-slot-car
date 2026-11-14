@@ -1,0 +1,1247 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Slot Car AR</title>
+
+  <!--
+    ============================================================
+    SLOT CAR AR  ·  A-Frame 1.5.0 + WebXR (hit-test)
+    ============================================================
+    Estructura de carpetas esperada:
+
+      /index.html           (este archivo)
+      /activos/pista.glb    (con el nodo "BezierCurve": las dos ranuras)
+      /activos/auto.glb
+
+    Mecánicas:
+      · Los autos recorren las ranuras leídas de pista.glb (carril 0 = exterior,
+        carril 1 = interior).
+      · ESPACIO (o el botón táctil) acelera; al soltar, la fricción frena.
+      · CURVAS: cada curva tiene una velocidad máxima segura  v = √(agarre × radio).
+        Si entras más rápido, el auto sale volando y queda inhabilitado 3 s; luego
+        reaparece en su última posición válida de la ranura, a velocidad 0.
+      · CARRERA: 25 vueltas (se cuenta al cruzar la línea de meta). Quien llegue
+        primero termina la carrera: todos se detienen y aparece "¡Carrera Finalizada!"
+        con un botón para reiniciar.
+      · SONIDO: motor eléctrico sintetizado en tiempo real con Web Audio (sin archivos
+        .mp3/.wav). Su tono y volumen siguen la velocidad del auto: ralentí grave
+        parado, más agudo y fuerte al acelerar, y baja al soltar. El audio se activa
+        con el primer gesto del usuario (tecla, toque o clic). Botón 🔊 o tecla M
+        para silenciar.
+
+    Para probar en AR:
+      · WebXR AR solo funciona en Chrome para Android (ARCore).
+      · Requiere HTTPS. "localhost" cuenta como seguro SOLO en el mismo
+        dispositivo; para el móvil usa un túnel HTTPS (ej. `ngrok http 5500`).
+      · En escritorio (sin AR) arranca en "vista previa": la pista aparece
+        inclinada frente a la cámara y se juega con ESPACIO.
+  -->
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    [hidden] { display: none !important; }   /* para que "hidden" gane a los display:flex/block de abajo */
+
+    /* Contenedor del HUD: también es el "overlayElement" de WebXR (dom-overlay) */
+    #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; z-index: 10; }
+    #hud > * { pointer-events: auto; }
+
+    /* Panel de velocidad */
+    #speed-panel {
+      position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+      min-width: 220px; padding: 10px 18px; text-align: center;
+      background: rgba(0, 0, 0, .55); border: 1px solid rgba(255,255,255,.25);
+      border-radius: 14px; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+      pointer-events: none;
+    }
+    #speed-label { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; opacity: .7; }
+    #speed-value { font-size: 40px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+    #speed-value small { font-size: 16px; font-weight: 500; opacity: .7; }
+    #speed-bar { height: 6px; margin-top: 6px; background: rgba(255,255,255,.2); border-radius: 3px; overflow: hidden; }
+    #speed-bar-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #3ddc84, #ffd54a, #ff5252); }
+    #laps { display: flex; justify-content: center; gap: 18px; margin-top: 8px; font-size: 13px; opacity: .9; font-variant-numeric: tabular-nums; }
+    #laps .you b   { color: #ff8a80; }
+    #laps .rival b { color: #82b1ff; }
+
+    /* Mensaje de ayuda */
+    #help {
+      position: absolute; bottom: 110px; left: 50%; transform: translateX(-50%);
+      padding: 8px 16px; font-size: 15px; text-align: center; box-sizing: border-box;
+      max-width: calc(100vw - 32px); width: max-content;
+      background: rgba(0, 0, 0, .55); border-radius: 18px; pointer-events: none;
+    }
+
+    /* Aviso de curva: aparece cuando vas demasiado rápido para la curva que viene */
+    #curve-warning {
+      position: absolute; bottom: 188px; left: 50%; transform: translateX(-50%);
+      padding: 6px 14px; font-size: 14px; font-weight: 700; white-space: nowrap;
+      color: #1b1b1b; background: #ffca28; border-radius: 999px; pointer-events: none;
+      animation: blink .5s steps(2, start) infinite;
+    }
+    @keyframes blink { 50% { opacity: .35; } }
+
+    /* Aviso de salida de pista (con cuenta atrás) */
+    #alert {
+      position: absolute; top: 44%; left: 50%; transform: translate(-50%, -50%);
+      padding: 14px 24px; text-align: center; font-size: 20px; font-weight: 700;
+      background: rgba(183, 28, 28, .9); border-radius: 14px; pointer-events: none;
+    }
+    #alert small { display: block; margin-top: 4px; font-size: 14px; font-weight: 500; opacity: .92; }
+
+    /* Botón táctil (en móvil no hay barra espaciadora) */
+    #throttle-btn {
+      position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
+      width: 160px; height: 64px; border: 0; border-radius: 32px;
+      font-size: 18px; font-weight: 700; letter-spacing: .06em; color: #fff;
+      background: #e53935; box-shadow: 0 4px 14px rgba(0,0,0,.4);
+      user-select: none; -webkit-user-select: none; touch-action: none;
+    }
+    #throttle-btn.active { background: #43a047; transform: translateX(-50%) scale(.96); }
+
+    /* Mensajes de estado (carga, errores, colocar pista) */
+    #status {
+      position: absolute; top: 150px; left: 50%; transform: translateX(-50%);
+      max-width: 85vw; padding: 8px 14px; text-align: center; font-size: 14px;
+      background: rgba(0,0,0,.6); border-radius: 10px; pointer-events: none;
+    }
+    #status:empty { display: none; }
+
+    /* Botón de sonido (arriba a la derecha) */
+    #sound-btn {
+      position: absolute; top: 16px; right: 16px; width: 44px; height: 44px; padding: 0;
+      border: 1px solid rgba(255,255,255,.25); border-radius: 50%; cursor: pointer;
+      font-size: 20px; line-height: 1; color: #fff; background: rgba(0, 0, 0, .55);
+      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    }
+    #sound-btn:active { transform: scale(.94); }
+    @media (max-width: 420px) {     /* móviles angostos: el panel se estrecha para no tocar el botón de sonido */
+      #speed-panel { min-width: 190px; padding: 10px 14px; }
+      #sound-btn { right: 12px; }
+    }
+    @media (max-width: 340px) { #sound-btn { top: 150px; } }   /* pantallas diminutas: debajo del panel */
+
+    /* Pantalla de fin de carrera */
+    #finish {
+      position: absolute; inset: 0; z-index: 20;
+      display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box;
+      background: rgba(0, 0, 0, .65); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+    }
+    #finish .card {
+      width: min(360px, 100%); padding: 26px 24px 22px; text-align: center; box-sizing: border-box;
+      background: #1c232b; border: 1px solid rgba(255,255,255,.2); border-radius: 18px;
+      box-shadow: 0 12px 40px rgba(0,0,0,.5);
+    }
+    #finish h2 { margin: 0 0 6px; font-size: 28px; }
+    #finish-winner { margin: 0 0 14px; font-size: 18px; color: #ffd54a; font-weight: 600; }
+    #finish-stats { list-style: none; margin: 0 0 12px; padding: 0; font-size: 16px; font-variant-numeric: tabular-nums; }
+    #finish-stats li { display: flex; justify-content: space-between; padding: 6px 4px; border-bottom: 1px solid rgba(255,255,255,.12); }
+    #finish-time { margin: 0 0 18px; font-size: 14px; opacity: .8; font-variant-numeric: tabular-nums; }
+    #restart-btn {
+      width: 100%; padding: 14px 18px; border: 0; border-radius: 12px; cursor: pointer;
+      font-size: 17px; font-weight: 700; color: #fff; background: #43a047;
+    }
+    #restart-btn:active { transform: scale(.98); }
+  </style>
+</head>
+
+<body>
+
+  <!-- ===================== UI HTML SUPERPUESTA ===================== -->
+  <div id="hud">
+    <div id="speed-panel">
+      <div id="speed-label">Velocidad</div>
+      <div id="speed-value">0 <small>km/h</small></div>
+      <div id="speed-bar"><div id="speed-bar-fill"></div></div>
+      <div id="laps">
+        <span class="you">Tú: <b id="lap-you">0</b>/<span class="lap-total">25</span></span>
+        <span class="rival">Rival: <b id="lap-rival">0</b>/<span class="lap-total">25</span></span>
+      </div>
+    </div>
+
+    <div id="status">Cargando modelos…</div>
+    <div id="alert" hidden></div>
+    <div id="curve-warning" hidden>⚠ Curva: suelta el acelerador</div>
+    <div id="help">Mantén ESPACIO para acelerar · suelta en las curvas</div>
+    <button id="throttle-btn" type="button">ACELERAR</button>
+    <button id="sound-btn" type="button" aria-label="Silenciar sonido" aria-pressed="false">🔊</button>
+
+    <!-- Fin de carrera -->
+    <div id="finish" hidden role="dialog" aria-modal="true" aria-labelledby="finish-title">
+      <div class="card">
+        <h2 id="finish-title">¡Carrera Finalizada!</h2>
+        <p id="finish-winner"></p>
+        <ul id="finish-stats"></ul>
+        <p id="finish-time"></p>
+        <button id="restart-btn" type="button">Reiniciar carrera</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== ESCENA A-FRAME ===================== -->
+  <!--
+    webxr        · hit-test: detección de superficies (requerido)
+                 · dom-overlay: deja ver el HUD HTML dentro de la sesión AR
+    ar-hit-test  · va en <a-scene>. Muestra un retículo sobre la superficie y,
+                   al tocar la pantalla, mueve "#world" ahí y emite "ar-hit-test-select".
+    game-manager · escala la pista, gestiona el modo AR / vista previa y la carrera
+                   (laps = número de vueltas de la carrera).
+  -->
+  <a-scene
+    webxr="requiredFeatures: hit-test; optionalFeatures: dom-overlay, local-floor; overlayElement: #hud"
+    ar-hit-test="target: #world"
+    renderer="antialias: true; alpha: true"
+    vr-mode-ui="enabled: false"
+    ar-mode-ui="enabled: true"
+    loading-screen="enabled: false"
+    game-manager="laps: 25; arSize: 1.2; previewSize: 1.6; previewTilt: 55">
+
+    <a-assets timeout="30000">
+      <a-asset-item id="pista" src="./activos/pista.glb"></a-asset-item>
+      <a-asset-item id="auto"  src="./activos/auto.glb"></a-asset-item>
+    </a-assets>
+
+    <!-- Luces (si el modelo se ve muy oscuro o quemado, ajusta estas intensidades) -->
+    <a-entity light="type: ambient; intensity: 1.5; color: #ffffff"></a-entity>
+    <a-entity light="type: directional; intensity: 2.5" position="1 3 2"></a-entity>
+
+    <!-- Mundo del juego (game-manager fija su posición y escala). hide-on-enter-ar lo oculta hasta colocarlo. -->
+    <a-entity id="world" hide-on-enter-ar>
+
+      <a-entity id="track" gltf-model="#pista"></a-entity>
+
+      <!--
+        Auto del jugador, en el carril 0 (exterior).
+          Movimiento
+            maxSpeed / acceleration / friction   velocidad máx., aceleración y frenado (unidades de la pista/s)
+            heightOffset  altura extra sobre la ranura (si el auto "flota" o se hunde)
+            modelYaw      giro extra si el auto mira hacia otro lado (0, 90, 180, -90)
+            clockwise     sentido de giro (true = horario visto desde arriba)
+          Salida de pista (NUEVO)
+            grip          agarre en curva. Velocidad segura = √(grip × radio de la curva).
+                          Más grip = curvas más fáciles; menos grip = más difíciles.
+            curveRadius   solo los tramos con radio menor a esto cuentan como "curva"
+            penalty       segundos inhabilitado tras salirse (3)
+            gravity       gravedad de la animación del vuelo
+          label           nombre en la pantalla de resultados
+          debug           true = muestra las curvas de la pista para comprobarlas
+        Sonido del motor (NUEVO) · engine-sound lee la velocidad de este auto:
+            volume        volumen general (1 = normal, 0.5 = mitad)
+            pitch         multiplicador del tono (1 = normal; 1.2 = más agudo)
+            idleHz/maxHz  tono base en ralentí y a máxima velocidad (Hz)
+            idleVolume/maxVolume   volumen en ralentí y a máxima velocidad (0..1)
+            brightness    brillo del sonido a máxima velocidad (Hz del filtro; menos = más sordo)
+          Para oír también al rival, añade engine-sound="volume: 0.5; pitch: 0.85" a #rival.
+        Si el auto es muy grande/pequeño, usa el atributo scale="..." aquí mismo.
+      -->
+      <a-entity id="car" gltf-model="#auto"
+        slot-car-controller="
+          lane: 0; label: Tú; hudLaps: #lap-you;
+          maxSpeed: 40; acceleration: 30; friction: 22; speedScale: 4;
+          grip: 125; curveRadius: 15; penalty: 3; gravity: 90;
+          heightOffset: 0; modelYaw: 0; clockwise: true; debug: false"
+        engine-sound="volume: 1; pitch: 1; idleHz: 70; maxHz: 700; idleVolume: 0.07; maxVolume: 0.40; brightness: 3200">
+      </a-entity>
+
+      <!-- Rival controlado por la CPU en el carril 1 (interior). Frena antes de las curvas. Bórralo si no lo quieres. -->
+      <a-entity id="rival" gltf-model="#auto"
+        slot-car-controller="
+          lane: 1; label: Rival; hudLaps: #lap-rival; ai: true; aiSkill: 0.8; tint: #4aa3ff;
+          maxSpeed: 40; acceleration: 30; friction: 22;
+          grip: 125; curveRadius: 15;
+          heightOffset: 0; modelYaw: 0; clockwise: true">
+      </a-entity>
+    </a-entity>
+
+    <!-- Cámara (en escritorio se mira con el ratón; en AR la controla el dispositivo) -->
+    <a-entity camera look-controls position="0 1.2 0"></a-entity>
+  </a-scene>
+
+  <script>
+  /* =====================================================================
+   * SlotPath · lógica pura (sin A-Frame ni THREE): leer las ranuras,
+   * recorrerlas, medir curvas y simular la velocidad. Está separada para
+   * poder probarla por sí sola.
+   * ===================================================================== */
+  /* BEGIN SlotPath */
+  const SlotPath = (function () {
+
+    function wrapAngle(a) {
+      while (a > Math.PI) a -= 2 * Math.PI;
+      while (a < -Math.PI) a += 2 * Math.PI;
+      return a;
+    }
+
+    // Convierte una malla de líneas (como la que exporta Blender para una curva)
+    // en cadenas de puntos ordenadas.
+    //   pos   : [x,y,z, x,y,z, ...]
+    //   index : índices de la malla (o null si los vértices van en orden)
+    //   mode  : 'segments' (pares sueltos, LINES), 'strip' o 'loop'
+    // Devuelve [{ points: [{x,y,z}...], gap }], donde "gap" es la distancia
+    // entre el primer y el último punto (≈0 si el lazo ya venía cerrado).
+    function chainsFromLines(pos, index, mode) {
+      const n = pos.length / 3;
+      const seq = index ? Array.from(index) : Array.from({ length: n }, (_, i) => i);
+
+      // Pares de vértices que forman cada segmento
+      const pairs = [];
+      if (mode === 'segments') {
+        for (let i = 0; i + 1 < seq.length; i += 2) pairs.push([seq[i], seq[i + 1]]);
+      } else {
+        for (let i = 0; i + 1 < seq.length; i++) pairs.push([seq[i], seq[i + 1]]);
+        if (mode === 'loop' && seq.length > 2) pairs.push([seq[seq.length - 1], seq[0]]);
+      }
+
+      // Soldadura SOLO de extremos sueltos (vértices que aparecen en un único segmento) que
+      // estén en la misma posición: sirve si el exportador duplicó los vértices de cada tramo.
+      // Los vértices intermedios NO se sueldan: una curva puede pasar dos veces por el mismo
+      // punto (p. ej. un pequeño pliegue) y no por eso son el mismo vértice.
+      const rawDeg = new Array(n).fill(0);
+      pairs.forEach(([a, b]) => { rawDeg[a]++; rawDeg[b]++; });
+      const canon = Array.from({ length: n }, (_, i) => i), keyToId = new Map();
+      for (let i = 0; i < n; i++) {
+        if (rawDeg[i] !== 1) continue;
+        const key = Math.round(pos[3*i] * 1e4) + ',' + Math.round(pos[3*i+1] * 1e4) + ',' + Math.round(pos[3*i+2] * 1e4);
+        if (!keyToId.has(key)) keyToId.set(key, i);
+        canon[i] = keyToId.get(key);
+      }
+
+      // Lista de adyacencia
+      const adj = new Map();
+      const link = (a, b) => {
+        a = canon[a]; b = canon[b];
+        if (a === b) return;
+        if (!adj.has(a)) adj.set(a, []);
+        if (!adj.has(b)) adj.set(b, []);
+        if (!adj.get(a).includes(b)) adj.get(a).push(b);
+        if (!adj.get(b).includes(a)) adj.get(b).push(a);
+      };
+      pairs.forEach(([a, b]) => link(a, b));
+
+      // Recorrido de cada componente: primero los que tienen extremos, luego los anillos.
+      const visited = new Set(), chains = [];
+      const walk = (start) => {
+        const chain = [start]; visited.add(start);
+        let prev = -1, cur = start;
+        for (;;) {
+          let next = -1;
+          for (const nb of adj.get(cur)) { if (nb !== prev && !visited.has(nb)) { next = nb; break; } }
+          if (next < 0) break;
+          chain.push(next); visited.add(next); prev = cur; cur = next;
+        }
+        return chain;
+      };
+      const ids = Array.from(adj.keys()).sort((a, b) => a - b);
+      const toPoints = (chain) => chain.map(i => ({ x: pos[3*i], y: pos[3*i+1], z: pos[3*i+2] }));
+      const emit = (chain) => {
+        if (chain.length < 4) return;
+        const pts = toPoints(chain), a = pts[0], b = pts[pts.length - 1];
+        chains.push({ points: pts, gap: Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) });
+      };
+      ids.filter(i => adj.get(i).length === 1).forEach(i => { if (!visited.has(i)) emit(walk(i)); });
+      ids.forEach(i => { if (!visited.has(i)) emit(walk(i)); });
+      return chains;
+    }
+
+    // Área con signo en el plano XZ. > 0  ==>  sentido horario visto desde arriba (+Y).
+    function signedAreaXZ(pts) {
+      let a = 0;
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i], q = pts[(i + 1) % pts.length];
+        a += p.x * q.z - q.x * p.z;
+      }
+      return a / 2;
+    }
+
+    // Quita "pliegues": vértices donde el trazado da media vuelta (giro > 90° en un solo
+    // vértice). En una curva suave nunca ocurre; aparece cuando un manejador de Bézier
+    // queda mal puesto y la línea retrocede unas décimas. Sin esto el auto giraría 180° ahí.
+    function removeFolds(P) {
+      let changed = true, guard = 0;
+      while (changed && P.length > 4 && guard++ < 200) {
+        changed = false;
+        for (let i = 0; i < P.length && P.length > 4; i++) {
+          const a = P[(i + P.length - 1) % P.length], b = P[i], c = P[(i + 1) % P.length];
+          const dot = (b.x - a.x) * (c.x - b.x) + (b.z - a.z) * (c.z - b.z);
+          if (dot < 0) { P.splice(i, 1); i--; changed = true; }
+        }
+      }
+      return P;
+    }
+
+    // Lazo cerrado parametrizado por longitud de arco: "s" son unidades recorridas.
+    class LanePath {
+      constructor(points) {
+        const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+        const P = [];
+        points.forEach(p => { const q = P[P.length - 1]; if (!q || d(p, q) > 1e-4) P.push(p); });
+        while (P.length > 1 && d(P[0], P[P.length - 1]) <= 1e-4) P.pop();
+        removeFolds(P);
+        this.pts = P;
+        this.cum = [0];
+        for (let i = 0; i < P.length; i++) this.cum.push(this.cum[i] + d(P[i], P[(i + 1) % P.length]));
+        this.length = this.cum[P.length];
+        this._a = { x: 0, y: 0, z: 0 };
+        this._b = { x: 0, y: 0, z: 0 };
+      }
+      // Posición en la distancia "s" (con vuelta al inicio). Escribe el resultado en "out".
+      sample(s, out) {
+        const L = this.length, n = this.pts.length;
+        s = ((s % L) + L) % L;
+        let lo = 0, hi = n;                       // cum[lo] <= s < cum[hi]
+        while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (this.cum[mid] <= s) lo = mid; else hi = mid; }
+        const a = this.pts[lo], b = this.pts[(lo + 1) % n];
+        const seg = this.cum[lo + 1] - this.cum[lo];
+        const t = seg > 0 ? (s - this.cum[lo]) / seg : 0;
+        out.x = a.x + (b.x - a.x) * t;
+        out.y = a.y + (b.y - a.y) * t;
+        out.z = a.z + (b.z - a.z) * t;
+        return out;
+      }
+      // Ángulo de giro (eje Y) mirando "look" unidades hacia atrás y hacia adelante: suaviza las esquinas.
+      heading(s, look) {
+        const a = this.sample(s - look, this._a), b = this.sample(s + look, this._b);
+        return Math.atan2(b.x - a.x, b.z - a.z);
+      }
+
+      /* ---------- Curvas y velocidad segura ---------- */
+
+      // Radio de giro a lo largo del carril, muestreado cada ~"step" unidades.
+      // Se mide cuánto gira la dirección entre s-win y s+win; en recta el radio es Infinity.
+      buildCurvature(step, win) {
+        step = step || 0.5; win = win || 2;
+        const N = Math.max(8, Math.round(this.length / step));
+        this.cStep = this.length / N;
+        this.radius = new Float32Array(N);
+        this.turn = new Int8Array(N);              // +1 / -1 = hacia qué lado gira
+        for (let i = 0; i < N; i++) {
+          const s = i * this.cStep;
+          const dh = wrapAngle(this.heading(s + win, 1) - this.heading(s - win, 1));
+          const k = Math.abs(dh) / (2 * win);
+          this.radius[i] = k > 1e-6 ? 1 / k : Infinity;
+          this.turn[i] = dh >= 0 ? 1 : -1;
+        }
+        return this;
+      }
+
+      // Velocidad máxima segura en cada punto:  v = √(agarre × radio)  dentro de las curvas
+      // (radio < curveRadius). En recta es Infinity (sin límite).
+      buildSafeSpeeds(grip, curveRadius) {
+        if (!this.radius) this.buildCurvature();
+        const N = this.radius.length;
+        this.safe = new Float32Array(N);
+        for (let i = 0; i < N; i++) this.safe[i] = this.radius[i] < curveRadius ? Math.sqrt(grip * this.radius[i]) : Infinity;
+        return this;
+      }
+      _idx(s) { const N = this.safe ? this.safe.length : this.radius.length; return Math.round((((s % this.length) + this.length) % this.length) / this.cStep) % N; }
+      radiusAt(s) { return this.radius[this._idx(s)]; }
+      turnAt(s)   { return this.turn[this._idx(s)]; }
+      safeAt(s)   { return this.safe[this._idx(s)]; }
+
+      // Velocidad máxima con la que todavía se puede llegar a cada curva próxima si se
+      // frena con una desaceleración "decel" (v² = vSegura² + 2·decel·distancia).
+      // Sirve para el rival y para el aviso de curva del jugador.
+      brakingLimit(s, decel, lookAhead) {
+        let lim = Infinity;
+        for (let k = 0; k <= lookAhead; k += this.cStep) {
+          const v = this.safeAt(s + k);
+          if (v !== Infinity) lim = Math.min(lim, Math.sqrt(v * v + 2 * decel * k));
+        }
+        return lim;
+      }
+    }
+
+    // Un paso de la física de velocidad.
+    //  · Acelerando: la aceleración se reduce al acercarse a maxSpeed.
+    //  · Soltando:   fricción seca + viscosa (más suave al final), hasta parar.
+    function stepSpeed(v, throttle, dt, p) {
+      if (throttle) v += p.acceleration * (1 - 0.7 * v / p.maxSpeed) * dt;
+      else          v -= p.friction * (0.35 + 0.65 * v / p.maxSpeed) * dt;
+      return Math.min(p.maxSpeed, Math.max(0, v));
+    }
+
+    return { chainsFromLines, signedAreaXZ, wrapAngle, LanePath, stepSpeed };
+  })();
+  /* END SlotPath */
+
+
+  /* =====================================================================
+   * AUDIO PROCEDURAL · GameAudio (contexto de audio) + EngineSynth (motor)
+   * ---------------------------------------------------------------------
+   * Todo el sonido se genera con la Web Audio API; no hay archivos de audio.
+   *
+   *  · GameAudio  Gestiona UN AudioContext compartido. Lo crea con el primer
+   *               gesto del usuario (política de autoplay), lo reanuda si el
+   *               navegador lo suspende, y ofrece el interruptor de silencio.
+   *  · EngineSynth  Un motor eléctrico de slot car:
+   *
+   *      sawtooth  f      ┐  (zumbido de las escobillas / cuerpo del sonido)
+   *      triangle  ≈2f    ├─► filtro paso bajo ─► trémolo ─► volumen ─► master
+   *      sine      f/2    ┘  (graves del ralentí)             ▲
+   *                                                  LFO (vibración del motor)
+   *
+   *    Con la velocidad (0..1) suben el tono f (ralentí → RPM máximas), el brillo
+   *    del filtro y el volumen; el trémolo grave del ralentí se afina y se
+   *    vuelve un silbido limpio a toda velocidad.
+   * ===================================================================== */
+  /* BEGIN Audio */
+  const GameAudio = (function () {
+    // Gestos que el navegador acepta para activar el audio (varían según tecla / ratón / táctil)
+    const GESTURES = ['pointerdown', 'pointerup', 'touchend', 'mousedown', 'click', 'keydown'];
+    let ctx = null, master = null, live = false, muted = false, armed = false, button = null;
+    const waiting = [];
+
+    function build(c) {                       // contexto -> volumen general -> altavoces
+      ctx = c;
+      master = ctx.createGain();
+      master.gain.value = muted ? 0 : 1;
+      master.connect(ctx.destination);
+    }
+
+    function goLive() {                       // el contexto ya suena: avisa a quien esperaba
+      if (live) return;
+      live = true;
+      GESTURES.forEach((g) => window.removeEventListener(g, onGesture, true));
+      waiting.splice(0).forEach((cb) => cb(ctx, master));
+    }
+
+    function onGesture() {
+      if (!ctx) {                             // se crea AQUÍ, dentro del gesto del usuario
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;                      // navegador sin Web Audio: el juego sigue sin sonido
+        let c;
+        try { c = new AC({ latencyHint: 'interactive' }); } catch (e) { c = new AC(); }
+        build(c);
+        ctx.addEventListener('statechange', () => { if (ctx.state === 'running') goLive(); });
+      }
+      if (ctx.state === 'running') goLive();
+      else ctx.resume().then(() => { if (ctx.state === 'running') goLive(); }).catch(() => {});
+    }
+
+    function onVisibility() {                 // pestaña en segundo plano: pausa; al volver, reanuda
+      if (!ctx || !live) return;
+      if (document.hidden) ctx.suspend().catch(() => {});
+      else ctx.resume().catch(() => {});
+    }
+
+    function syncButton() {
+      if (!button) return;
+      button.textContent = muted ? '🔇' : '🔊';
+      button.setAttribute('aria-pressed', String(muted));
+      button.setAttribute('aria-label', muted ? 'Activar sonido' : 'Silenciar sonido');
+    }
+
+    function setMuted(m) {
+      muted = !!m;
+      if (master) master.gain.setTargetAtTime(muted ? 0 : 1, ctx.currentTime, 0.03);
+      syncButton();
+    }
+
+    return {
+      // Empieza a escuchar el primer gesto. No crea ningún AudioContext hasta que ocurra.
+      arm() {
+        if (armed) return;
+        armed = true;
+        GESTURES.forEach((g) => window.addEventListener(g, onGesture, true));
+        document.addEventListener('visibilitychange', onVisibility);
+      },
+      // Ejecuta cb(ctx, master) cuando el audio ya está activo (o ahora mismo, si ya lo está)
+      onReady(cb) { if (live) cb(ctx, master); else waiting.push(cb); },
+      // Usa un contexto ya creado (pruebas / render sin conexión)
+      useContext(c) { build(c); live = true; },
+      // Botón de silencio + tecla M (se enlaza una sola vez)
+      bindToggle(btn) {
+        if (!btn || button === btn) return;
+        button = btn;
+        btn.addEventListener('click', () => { setMuted(!muted); btn.blur(); });
+        window.addEventListener('keydown', (e) => { if (e.code === 'KeyM' && !e.repeat) setMuted(!muted); });
+        syncButton();
+      },
+      setMuted,
+      get muted() { return muted; },
+      get live() { return live; },
+      get context() { return ctx; }
+    };
+  })();
+
+  class EngineSynth {
+    constructor(cfg) {
+      this.cfg = Object.assign({
+        idleHz: 70, maxHz: 700,          // tono base: ralentí -> máxima velocidad (Hz)
+        idleGain: 0.07, maxGain: 0.40,   // volumen: ralentí -> máxima velocidad (0..1)
+        minCutoff: 500, maxCutoff: 3200, // brillo (filtro paso bajo): ralentí -> máxima velocidad (Hz)
+        q: 2.5,                          // resonancia del filtro: da el "silbido" del motor
+        curve: 0.9,                      // 1 = lineal; <1 = el tono sube un poco más rápido al principio
+        pitch: 1, volume: 1,             // multiplicadores generales
+        smooth: 0.06                     // suavizado de los cambios (s): evita saltos y "clics"
+      }, cfg || {});
+      this.ctx = null;
+      this.nodes = null;
+    }
+
+    // Parámetros del sonido para una velocidad dada (ratio 0..1). Función pura: fácil de probar.
+    static targets(ratio, cfg) {
+      const r = Math.min(1, Math.max(0, +ratio || 0));
+      const e = Math.pow(r, cfg.curve);
+      const lerp = (a, b) => a + (b - a) * e;
+      return {
+        freq:     lerp(cfg.idleHz, cfg.maxHz) * cfg.pitch,   // tono fundamental
+        cutoff:   lerp(cfg.minCutoff, cfg.maxCutoff),        // brillo
+        gain:     lerp(cfg.idleGain, cfg.maxGain) * cfg.volume,
+        sub:      lerp(0.5, 0.2),                            // peso de los graves
+        trem:     lerp(0.35, 0.06),                          // profundidad del zumbido (grande en ralentí)
+        tremRate: lerp(22, 80)                               // velocidad del zumbido (Hz)
+      };
+    }
+
+    // Se engancha a GameAudio: construye los nodos cuando el audio esté activo
+    attach(hub) { hub.onReady((ctx, dest) => this.build(ctx, dest)); }
+
+    build(ctx, dest) {
+      if (this.nodes) return;
+      this.ctx = ctx;
+      const osc = (type) => { const o = ctx.createOscillator(); o.type = type; return o; };
+      const gain = (v) => { const g = ctx.createGain(); g.gain.value = v; return g; };
+
+      const saw = osc('sawtooth'), tri = osc('triangle'), sub = osc('sine'), lfo = osc('sine');
+      const sawMix = gain(0.55), triMix = gain(0.3), subMix = gain(0.5);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass'; lp.Q.value = this.cfg.q;
+      const trem = gain(1), lfoDepth = gain(0), out = gain(0);   // el volumen arranca en silencio
+
+      saw.connect(sawMix); tri.connect(triMix); sub.connect(subMix);
+      sawMix.connect(lp); triMix.connect(lp); subMix.connect(lp);
+      lp.connect(trem); trem.connect(out); out.connect(dest);
+      lfo.connect(lfoDepth); lfoDepth.connect(trem.gain);        // el LFO modula el trémolo
+
+      // Valores iniciales de ralentí (así no hay un barrido desde 440 Hz al arrancar)
+      const p = EngineSynth.targets(0, this.cfg);
+      saw.frequency.value = p.freq; tri.frequency.value = p.freq * 2.01; sub.frequency.value = p.freq * 0.5;
+      lp.frequency.value = p.cutoff; subMix.gain.value = p.sub;
+      trem.gain.value = 1 - p.trem / 2; lfoDepth.gain.value = p.trem / 2; lfo.frequency.value = p.tremRate;
+
+      [saw, tri, sub, lfo].forEach((o) => o.start());
+      this.nodes = { saw, tri, sub, lfo, sawMix, triMix, subMix, lp, trem, lfoDepth, out };
+    }
+
+    // Actualiza el sonido. ratio = velocidad / velocidad máxima. active = false apaga el motor
+    // (auto fuera de pista, carrera terminada...). "t" opcional: instante exacto (render sin conexión).
+    update(ratio, active, t) {
+      const n = this.nodes;
+      if (!n) return;
+      const now = t === undefined ? this.ctx.currentTime : t;
+      const p = EngineSynth.targets(ratio, this.cfg), k = this.cfg.smooth;
+      n.saw.frequency.setTargetAtTime(p.freq, now, k);
+      n.tri.frequency.setTargetAtTime(p.freq * 2.01, now, k);   // un poco desafinado: da el batido metálico
+      n.sub.frequency.setTargetAtTime(p.freq * 0.5, now, k);
+      n.lp.frequency.setTargetAtTime(p.cutoff, now, k);
+      n.subMix.gain.setTargetAtTime(p.sub, now, k);
+      n.trem.gain.setTargetAtTime(1 - p.trem / 2, now, k);
+      n.lfoDepth.gain.setTargetAtTime(p.trem / 2, now, k);
+      n.lfo.frequency.setTargetAtTime(p.tremRate, now, k);
+      n.out.gain.setTargetAtTime(active ? p.gain : 0, now, active ? k * 1.5 : 0.04);   // apagar es más rápido
+    }
+
+    dispose() {
+      const n = this.nodes;
+      if (!n) return;
+      [n.saw, n.tri, n.sub, n.lfo].forEach((o) => { try { o.stop(); } catch (e) {} });
+      n.out.disconnect();
+      this.nodes = null;
+    }
+  }
+  /* END Audio */
+
+
+  /* =====================================================================
+   * COMPONENTE: slot-car-controller
+   * ---------------------------------------------------------------------
+   * Mueve un auto por una de las ranuras de la pista:
+   *   · Lee las curvas de pista.glb y elige el carril "lane".
+   *   · ESPACIO (o el botón táctil) acelera; al soltar frena por fricción.
+   *   · SALIDA DE PISTA: si en una curva la velocidad supera la segura, el auto
+   *     sale volando (vuelo + rebote), queda inhabilitado "penalty" segundos y
+   *     reaparece en la última posición válida de la ranura, a velocidad 0.
+   *   · VUELTAS: al pasar por la línea de meta (inicio de la ranura) suma una vuelta
+   *     y avisa a game-manager, que decide cuándo termina la carrera.
+   *   · Con ai:true se conduce solo (rival): frena antes de las curvas y arranca
+   *     cuando el jugador acelera por primera vez.
+   *
+   * Estados:  'run' (en la ranura)  →  'down' (volando / inhabilitado)  →  'run'
+   * ===================================================================== */
+  AFRAME.registerComponent('slot-car-controller', {
+    schema: {
+      track:        { type: 'selector', default: '#track' },   // entidad con pista.glb
+      lane:         { type: 'int',      default: 0 },          // 0 = carril más largo (exterior)
+      clockwise:    { type: 'boolean',  default: true },       // sentido de la carrera (visto desde arriba)
+      label:        { type: 'string',   default: 'Tú' },       // nombre en los resultados
+
+      maxSpeed:     { type: 'number',   default: 40 },         // unidades de la pista / s
+      acceleration: { type: 'number',   default: 30 },         // unidades / s²
+      friction:     { type: 'number',   default: 22 },         // desaceleración al soltar
+      speedScale:   { type: 'number',   default: 4 },          // factor para mostrar "km/h"
+
+      grip:         { type: 'number',   default: 125 },        // agarre: velocidad segura = √(grip × radio)
+      curveRadius:  { type: 'number',   default: 15 },         // radios menores a esto son "curva"
+      penalty:      { type: 'number',   default: 3 },          // segundos inhabilitado tras salirse
+      gravity:      { type: 'number',   default: 90 },         // gravedad del vuelo (unidades/s²)
+
+      heightOffset: { type: 'number',   default: 0 },          // altura extra sobre la ranura
+      modelYaw:     { type: 'number',   default: 0 },          // corrección de orientación del modelo (grados)
+      lookAhead:    { type: 'number',   default: 1 },          // suavizado de la orientación (unidades)
+
+      ai:           { type: 'boolean',  default: false },      // true = rival controlado por la CPU
+      aiSkill:      { type: 'number',   default: 0.8 },        // 0..1, fracción de maxSpeed que busca el rival
+      aiCaution:    { type: 'number',   default: 0.92 },       // el rival entra a las curvas a esta fracción de la velocidad segura
+      aiDecel:      { type: 'number',   default: 12 },         // frenado que supone el rival (conservador)
+      tint:         { type: 'string',   default: '' },         // color para distinguir al auto (ej. #4aa3ff)
+
+      hudLaps:      { type: 'selector', default: '#lap-you' }, // dónde mostrar las vueltas
+      debug:        { type: 'boolean',  default: false }       // true = muestra las curvas de la pista
+    },
+
+    init: function () {
+      this.speed = 0;          // velocidad actual (unidades/s)
+      this.s = 0;              // distancia recorrida sobre el carril (0 = línea de meta)
+      this.laps = 0;
+      this.throttle = false;   // ¿se está acelerando de verdad?
+      this.held = false;       // ¿está pulsada la tecla/botón? (aunque esté bloqueada)
+      this.lock = false;       // exige soltar y volver a pulsar tras salirse
+      this.enabled = false;    // se activa con "game-start"
+      this.finished = false;   // la carrera terminó: todo detenido
+      this.started = false;    // el jugador ya aceleró al menos una vez
+      this.go = false;         // (rival) puede arrancar
+      this.state = 'run';      // 'run' | 'down'
+      this.lastValidS = 0;     // última posición válida sobre la ranura
+      this.downT = 0;          // segundos que quedan inhabilitado
+      this.vel = { x: 0, y: 0, z: 0 };    // velocidad del vuelo
+      this.spin = { x: 0, y: 0, z: 0 };   // giro del vuelo (rad/s)
+      this.groundY = 0;
+      this.path = null;
+      this.lastHud = 0;
+      this.warnShown = false;
+      this.lastSec = -1;
+      this.tmp = { x: 0, y: 0, z: 0 };
+
+      this.hudWarn  = document.getElementById('curve-warning');
+      this.hudAlert = document.getElementById('alert');
+
+      this.el.object3D.visible = false;   // oculto hasta tener la ruta
+
+      // Eventos del juego (los emite game-manager sobre la escena)
+      const scene = this.el.sceneEl;
+      this.onGameStart  = () => { this.enabled = true; };
+      this.onGameReset  = () => this.reset();
+      this.onRaceStart  = () => { this.go = true; };
+      this.onRaceFinish = () => this.freeze();
+      scene.addEventListener('game-start', this.onGameStart);
+      scene.addEventListener('game-reset', this.onGameReset);
+      scene.addEventListener('race-start', this.onRaceStart);
+      scene.addEventListener('race-finish', this.onRaceFinish);
+
+      if (!this.data.ai) this.bindInput();
+
+      // La ruta se construye cuando pista.glb ya está cargada
+      this.onTrackLoaded = () => this.buildPath();
+      this.data.track.addEventListener('model-loaded', this.onTrackLoaded);
+      if (this.data.track.getObject3D('mesh')) this.buildPath();
+
+      // Color del auto (para distinguir al rival)
+      this.onCarLoaded = () => this.applyTint();
+      this.el.addEventListener('model-loaded', this.onCarLoaded);
+      if (this.el.getObject3D('mesh')) this.applyTint();
+    },
+
+    /* ---------- Ruta: leer las ranuras de pista.glb ---------- */
+    buildPath: function () {
+      const d = this.data, trackEl = d.track;
+      const root = trackEl.getObject3D('mesh');
+      if (!root) return;
+
+      // Matrices al día para poder pasar las curvas al espacio de #world
+      this.el.sceneEl.object3D.updateMatrixWorld(true);
+      const trackObj = trackEl.object3D;
+      const inv = new THREE.Matrix4().copy(trackObj.matrixWorld).invert();
+      const v = new THREE.Vector3();
+
+      const lanes = [];
+      root.traverse((o) => {
+        if (!(o.isLine && o.geometry && o.geometry.attributes.position)) return;
+        o.visible = d.debug;                       // las líneas de guía no se dibujan (salvo en debug)
+        // curva -> espacio local del padre de la pista (#world), donde viven los autos
+        const m = new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld).premultiply(trackObj.matrix);
+        const attr = o.geometry.attributes.position;
+        const pos = new Float32Array(attr.count * 3);
+        for (let i = 0; i < attr.count; i++) {
+          v.fromBufferAttribute(attr, i).applyMatrix4(m);
+          pos[3*i] = v.x; pos[3*i+1] = v.y; pos[3*i+2] = v.z;
+        }
+        const mode = o.isLineLoop ? 'loop' : (o.isLineSegments ? 'segments' : 'strip');
+        const index = o.geometry.index ? o.geometry.index.array : null;
+        SlotPath.chainsFromLines(pos, index, mode).forEach(c => lanes.push(c.points));
+      });
+
+      if (!lanes.length) {
+        console.warn('[slot-car] No se encontraron curvas (líneas) dentro de pista.glb');
+        const st = document.getElementById('status');
+        if (st) st.textContent = 'No se encontraron las ranuras (BezierCurve) en pista.glb';
+        return;
+      }
+
+      // Carril 0 = el lazo más largo
+      const paths = lanes.map(pts => new SlotPath.LanePath(pts)).sort((a, b) => b.length - a.length);
+      const path = paths[Math.min(Math.max(d.lane, 0), paths.length - 1)];
+
+      // Mismo sentido de giro para todos los carriles
+      const isCW = SlotPath.signedAreaXZ(path.pts) > 0;
+      this.path = (isCW === d.clockwise) ? path : new SlotPath.LanePath(path.pts.slice().reverse());
+
+      // Mide las curvas del carril y calcula la velocidad segura de cada punto
+      this.path.buildCurvature().buildSafeSpeeds(d.grip, d.curveRadius);
+
+      this.el.object3D.visible = true;
+      this.placeCar();
+    },
+
+    /* ---------- Entrada: barra espaciadora + botón táctil ---------- */
+    bindInput: function () {
+      this.onKeyDown = (e) => {
+        if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) this.setThrottle(true); }
+      };
+      this.onKeyUp = (e) => {
+        if (e.code === 'Space') { e.preventDefault(); this.setThrottle(false); }
+      };
+      this.onBlur = () => this.setThrottle(false);
+      window.addEventListener('keydown', this.onKeyDown);
+      window.addEventListener('keyup', this.onKeyUp);
+      window.addEventListener('blur', this.onBlur);
+
+      // Botón táctil / ratón (los pointer events cubren ambos)
+      this.btn = document.getElementById('throttle-btn');
+      this.onBtnDown = (e) => { e.preventDefault(); this.btn.setPointerCapture(e.pointerId); this.setThrottle(true); };
+      this.onBtnUp   = (e) => { e.preventDefault(); this.setThrottle(false); };
+      this.btn.addEventListener('pointerdown', this.onBtnDown);
+      this.btn.addEventListener('pointerup', this.onBtnUp);
+      this.btn.addEventListener('pointercancel', this.onBtnUp);
+    },
+
+    // "on" = el jugador pulsa/suelta. El acelerador solo actúa si el auto está en la ranura,
+    // la carrera sigue y no hay un bloqueo pendiente (ver derail()).
+    setThrottle: function (on) {
+      if (!on) this.lock = false;
+      this.held = on;
+      this.throttle = on && !this.lock && this.state === 'run' && !this.finished;
+      if (this.btn) this.btn.classList.toggle('active', on);
+      if (this.throttle && this.enabled && !this.started) {   // primera aceleración = arranca la carrera
+        this.started = true;
+        this.el.sceneEl.emit('race-start');
+      }
+    },
+
+    reset: function () {
+      this.speed = 0; this.s = 0; this.laps = 0; this.lastValidS = 0;
+      this.enabled = false; this.started = false; this.go = false;
+      this.finished = false; this.state = 'run'; this.downT = 0;
+      this.throttle = false; this.lock = false;
+      this.vel = { x: 0, y: 0, z: 0 }; this.spin = { x: 0, y: 0, z: 0 };
+      if (this.btn) this.btn.classList.remove('active');
+      this.held = false;
+      this.hideWarnings();
+      this.showLaps();
+      this.placeCar();
+      this.updateHud(0, true);
+    },
+
+    showLaps: function () {
+      if (this.data.hudLaps) this.data.hudLaps.textContent = this.laps;
+    },
+
+    hideWarnings: function () {
+      this.warnShown = false; this.lastSec = -1;
+      if (this.hudWarn) this.hudWarn.hidden = true;
+      if (this.hudAlert) this.hudAlert.hidden = true;
+    },
+
+    applyTint: function () {
+      if (!this.data.tint) return;
+      const mesh = this.el.getObject3D('mesh');
+      if (!mesh) return;
+      const tint = (m) => { const c = m.clone(); if (c.color) c.color.set(this.data.tint); return c; };
+      mesh.traverse((o) => {
+        if (o.isMesh && o.material) o.material = Array.isArray(o.material) ? o.material.map(tint) : tint(o.material);
+      });
+    },
+
+    /* ---------- Posición y orientación sobre la ranura ---------- */
+    placeCar: function () {
+      if (!this.path) return;
+      const d = this.data, p = this.path.sample(this.s, this.tmp);
+      this.groundY = p.y + d.heightOffset;
+      this.el.object3D.position.set(p.x, this.groundY, p.z);
+      // El modelo "mira" hacia +Z por defecto; usa modelYaw si el tuyo mira a otro lado
+      const yaw = this.path.heading(this.s, d.lookAhead) + THREE.MathUtils.degToRad(d.modelYaw);
+      this.el.object3D.rotation.set(0, yaw, 0);
+    },
+
+    /* ---------- Bucle principal ---------- */
+    tick: function (time, delta) {
+      if (!this.enabled || !this.path || this.finished) return;
+      const dt = Math.min(delta / 1000, 0.05);     // evita saltos al volver de otra pestaña
+      if (this.state === 'down') this.tickDown(dt); else this.tickRun(time, dt);
+      this.updateHud(time, false);
+    },
+
+    // --- En la ranura: velocidad, avance, vueltas y control de curvas ---
+    tickRun: function (time, dt) {
+      const d = this.data, path = this.path;
+
+      if (d.ai) {
+        // Rival: velocidad objetivo = su ritmo (con una pequeña variación), limitada por el
+        // perfil de frenado para llegar a cada curva por debajo de la velocidad segura.
+        const base = d.aiSkill * d.maxSpeed * (1 + 0.08 * Math.sin(time / 1500 + d.lane));
+        const brake = path.brakingLimit(this.s, d.aiDecel, d.maxSpeed * d.maxSpeed / (2 * d.aiDecel)) * d.aiCaution;
+        this.throttle = this.go && this.speed < Math.min(base, brake);
+      }
+
+      this.speed = SlotPath.stepSpeed(this.speed, this.throttle, dt, d);
+
+      this.s += this.speed * dt;
+      if (this.s >= path.length) {                 // cruzó la línea de meta
+        this.s -= path.length;
+        this.laps++;
+        this.showLaps();
+        this.el.sceneEl.emit('lap-complete', { label: d.label, laps: this.laps, ai: d.ai });
+        if (this.finished) return;                 // esta vuelta cerró la carrera
+      }
+      this.placeCar();
+
+      // ¿Curva demasiado rápido?  safeAt() es Infinity en las rectas.
+      if (this.speed > path.safeAt(this.s)) this.derail();
+      else this.lastValidS = this.s;
+    },
+
+    // --- Salida de pista: el auto sale despedido en la dirección en que iba ---
+    derail: function () {
+      const d = this.data, path = this.path;
+      const h = path.heading(this.s, d.lookAhead);               // hacia dónde iba
+      const sgn = path.turnAt(this.s);                           // hacia qué lado giraba la curva
+      const ox = -sgn * Math.cos(h), oz = sgn * Math.sin(h);     // vector hacia el exterior de la curva
+      const sp = this.speed;
+
+      // Sigue recto (tangente) y se desvía hacia el exterior, con un salto proporcional a la velocidad
+      this.vel = {
+        x: Math.sin(h) * sp * 0.85 + ox * sp * 0.45,
+        y: 10 + 0.5 * sp,
+        z: Math.cos(h) * sp * 0.85 + oz * sp * 0.45
+      };
+      const rnd = (a, b) => (Math.random() < 0.5 ? -1 : 1) * (a + Math.random() * (b - a));
+      this.spin = { x: rnd(5, 9), y: rnd(8, 14), z: rnd(3, 6) };
+
+      this.state = 'down';
+      this.downT = d.penalty;
+      this.speed = 0;
+      this.throttle = false;
+      if (this.held) this.lock = true;                           // si sigue pulsando, debe soltar y volver a pulsar
+      if (this.btn) this.btn.classList.remove('active');
+      this.lastSec = -1;
+      this.updateAlert();                                        // el aviso sale en el mismo instante
+      this.el.emit('derail', { s: this.lastValidS });
+    },
+
+    // Aviso "¡Te saliste de la pista!" con cuenta atrás (solo el jugador)
+    updateAlert: function () {
+      if (this.data.ai || !this.hudAlert) return;
+      const sec = Math.max(1, Math.ceil(this.downT));
+      if (sec === this.lastSec) return;
+      this.lastSec = sec;
+      this.hudAlert.innerHTML = '¡Te saliste de la pista!<small>Reaparece en ' + sec + ' s</small>';
+      this.hudAlert.hidden = false;
+    },
+
+    // --- Inhabilitado: física simple de vuelo, rebote y deslizamiento ---
+    tickDown: function (dt) {
+      const d = this.data, o = this.el.object3D, p = o.position, v = this.vel, sp = this.spin;
+
+      v.y -= d.gravity * dt;
+      p.x += v.x * dt; p.y += v.y * dt; p.z += v.z * dt;
+      o.rotation.x += sp.x * dt; o.rotation.y += sp.y * dt; o.rotation.z += sp.z * dt;
+
+      if (p.y <= this.groundY) {                                 // toca el suelo
+        p.y = this.groundY;
+        if (v.y < -6) {                                          // rebote amortiguado
+          v.y = -v.y * 0.35; v.x *= 0.7; v.z *= 0.7;
+          sp.x *= 0.5; sp.y *= 0.5; sp.z *= 0.5;
+        } else {                                                 // desliza y se frena
+          v.y = 0;
+          const f = Math.max(0, 1 - 6 * dt), g = Math.max(0, 1 - 5 * dt);
+          v.x *= f; v.z *= f; sp.x *= g; sp.y *= g; sp.z *= g;
+        }
+      }
+
+      this.downT -= dt;
+      this.updateAlert();
+      if (this.downT <= 0) this.respawn();
+    },
+
+    // --- Vuelve a la última posición válida de la ranura, a velocidad 0 ---
+    respawn: function () {
+      this.state = 'run';
+      this.speed = 0;
+      this.s = this.lastValidS;
+      this.vel = { x: 0, y: 0, z: 0 }; this.spin = { x: 0, y: 0, z: 0 };
+      this.placeCar();                                           // también endereza el auto
+      this.hideWarnings();
+      this.throttle = this.held && !this.lock && !this.data.ai;  // si ya tenía el acelerador listo, sigue
+    },
+
+    // --- Fin de carrera: todo se detiene por completo ---
+    freeze: function () {
+      this.finished = true;
+      this.speed = 0;
+      this.throttle = false;
+      if (this.state === 'down') {                               // si iba volando, queda en el suelo
+        this.el.object3D.position.y = this.groundY;
+        this.vel = { x: 0, y: 0, z: 0 }; this.spin = { x: 0, y: 0, z: 0 };
+      }
+      if (this.btn) this.btn.classList.remove('active');
+      this.hideWarnings();
+      this.updateHud(0, true);
+    },
+
+    // --- Velocímetro y aviso de curva (solo el jugador), ~30 veces por segundo ---
+    updateHud: function (time, force) {
+      const d = this.data;
+      if (d.ai) return;
+      if (!force && time - this.lastHud < 33) return;
+      this.lastHud = time;
+      document.getElementById('speed-value').innerHTML = Math.round(this.speed * d.speedScale) + ' <small>km/h</small>';
+      document.getElementById('speed-bar-fill').style.width = (this.speed / d.maxSpeed * 100).toFixed(0) + '%';
+
+      // Aviso: vas demasiado rápido para la próxima curva aunque sueltes el acelerador ya
+      let warn = false;
+      if (this.path && this.state === 'run' && !this.finished) {
+        const decel = d.friction * 0.5;
+        warn = this.speed > this.path.brakingLimit(this.s, decel, d.maxSpeed * d.maxSpeed / (2 * decel));
+      }
+      if (warn !== this.warnShown) { this.warnShown = warn; if (this.hudWarn) this.hudWarn.hidden = !warn; }
+    },
+
+    remove: function () {
+      const scene = this.el.sceneEl;
+      scene.removeEventListener('game-start', this.onGameStart);
+      scene.removeEventListener('game-reset', this.onGameReset);
+      scene.removeEventListener('race-start', this.onRaceStart);
+      scene.removeEventListener('race-finish', this.onRaceFinish);
+      this.data.track.removeEventListener('model-loaded', this.onTrackLoaded);
+      this.el.removeEventListener('model-loaded', this.onCarLoaded);
+      if (this.onKeyDown) {
+        window.removeEventListener('keydown', this.onKeyDown);
+        window.removeEventListener('keyup', this.onKeyUp);
+        window.removeEventListener('blur', this.onBlur);
+      }
+    }
+  });
+
+
+  /* =====================================================================
+   * COMPONENTE: game-manager  (va en <a-scene>)
+   * ---------------------------------------------------------------------
+   *   · Escala #world para que la pista mida arSize metros en AR
+   *     (o previewSize en escritorio), sea cual sea su tamaño en el modelo.
+   *   · Escritorio: coloca la pista inclinada frente a la cámara y arranca.
+   *   · AR: espera el toque del usuario para colocar la pista (hit-test),
+   *     la gira hacia él y arranca.
+   *   · CARRERA: lleva la cuenta de las vueltas (laps). Cuando el primer auto
+   *     completa todas, emite "race-finish" (todos los autos se detienen) y
+   *     muestra la pantalla de resultados con el botón de reinicio.
+   * ===================================================================== */
+  AFRAME.registerComponent('game-manager', {
+    schema: {
+      laps:            { type: 'int',    default: 25 },                      // vueltas de la carrera
+      arSize:          { type: 'number', default: 1.2 },                     // lado mayor de la pista en AR (m)
+      previewSize:     { type: 'number', default: 1.6 },                     // ídem en la vista previa de escritorio
+      previewPosition: { type: 'vec3',   default: { x: 0, y: 1, z: -1.4 } }, // centro de la pista en la vista previa
+      previewTilt:     { type: 'number', default: 55 }                       // inclinación hacia la cámara (grados)
+    },
+
+    init: function () {
+      const scene = this.el, self = this;
+      const world = this.world = document.getElementById('world');
+      const track = document.getElementById('track');
+      const status = this.status = document.getElementById('status');
+      this.fit = { ar: 1, preview: 1 };
+      this.raceState = 'ready';          // 'ready' -> 'racing' -> 'finished'
+      this.raceStartT = 0;
+
+      // Total de vueltas en el HUD
+      document.querySelectorAll('.lap-total').forEach((el) => { el.textContent = this.data.laps; });
+
+      // 1) Carga de modelos (pista + auto + rival)
+      let loaded = 0, total = document.querySelectorAll('[gltf-model]').length;
+      const onLoaded = () => {
+        if (++loaded < total) return;
+        if (scene.is('ar-mode')) { status.textContent = 'Apunta al suelo y toca la pantalla para colocar la pista'; }
+        else {
+          status.textContent = 'Vista previa de escritorio · en un móvil Android pulsa el botón AR';
+          setTimeout(() => { if (!scene.is('ar-mode')) status.textContent = ''; }, 4000);
+        }
+      };
+      document.querySelectorAll('[gltf-model]').forEach((el) => {
+        el.addEventListener('model-loaded', onLoaded);
+        el.addEventListener('model-error', () => { status.textContent = 'No se pudo cargar un modelo de ./activos/ (revisa la consola)'; });
+      });
+
+      // 2) Escala: medimos la pista con #world en su posición "limpia" y la reducimos al tamaño deseado
+      track.addEventListener('model-loaded', (e) => {
+        const o = world.object3D;
+        const sp = o.position.clone(), sq = o.quaternion.clone(), ss = o.scale.clone();
+        o.position.set(0, 0, 0); o.quaternion.identity(); o.scale.set(1, 1, 1);
+        o.updateMatrixWorld(true);
+        const size = new THREE.Box3().setFromObject(e.detail.model).getSize(new THREE.Vector3());
+        o.position.copy(sp); o.quaternion.copy(sq); o.scale.copy(ss);
+        o.updateMatrixWorld(true);
+        const max = Math.max(size.x, size.z) || 1;
+        self.fit = { ar: self.data.arSize / max, preview: self.data.previewSize / max };
+        self.applyScale();
+      });
+
+      // 3) Escritorio / vista previa: posicionamos y arrancamos enseguida
+      scene.addEventListener('loaded', () => { if (!scene.is('ar-mode')) this.startPreview(); });
+
+      // 4) Entrar en AR: reiniciamos y esperamos el toque para colocar la pista
+      scene.addEventListener('enter-vr', () => {
+        if (!scene.is('ar-mode')) return;
+        scene.emit('game-reset');
+        world.object3D.rotation.set(0, 0, 0);
+        this.applyScale();
+        status.textContent = 'Apunta al suelo y toca la pantalla para colocar la pista';
+      });
+
+      // 5) El usuario toca: la pista queda colocada (ar-hit-test ya movió #world); la giramos hacia él
+      scene.addEventListener('ar-hit-test-select', () => {
+        const cam = scene.camera;
+        if (cam) {
+          const c = new THREE.Vector3(); cam.getWorldPosition(c);
+          const p = world.object3D.position;
+          world.object3D.rotation.set(0, Math.atan2(c.x - p.x, c.z - p.z), 0);
+        }
+        status.textContent = '';
+        scene.emit('game-start');
+      });
+
+      // 6) Salir de AR: volvemos a la vista previa
+      scene.addEventListener('exit-vr', () => { this.startPreview(); });
+
+      // 7) Carrera ---------------------------------------------------------
+      this.finishEl = document.getElementById('finish');
+      scene.addEventListener('race-start', () => { this.raceState = 'racing'; this.raceStartT = performance.now(); });
+      scene.addEventListener('lap-complete', (e) => {
+        if (this.raceState === 'finished') return;
+        if (e.detail.laps >= this.data.laps) this.finishRace(e.detail);
+      });
+      // Cualquier reinicio (botón, entrar/salir de AR) oculta los resultados y deja la carrera lista
+      scene.addEventListener('game-reset', () => { this.raceState = 'ready'; this.finishEl.hidden = true; });
+      document.getElementById('restart-btn').addEventListener('click', () => this.restart());
+
+      // Tocar el HUD no debe contar como "seleccionar" en WebXR (colocaría la pista otra vez)
+      document.getElementById('hud').addEventListener('beforexrselect', (e) => e.preventDefault());
+    },
+
+    applyScale: function () {
+      this.world.object3D.scale.setScalar(this.el.is('ar-mode') ? this.fit.ar : this.fit.preview);
+    },
+
+    startPreview: function () {
+      const d = this.data, o = this.world.object3D;
+      o.visible = true;
+      o.position.set(d.previewPosition.x, d.previewPosition.y, d.previewPosition.z);
+      o.rotation.set(THREE.MathUtils.degToRad(d.previewTilt), 0, 0);
+      this.applyScale();
+      this.el.emit('game-reset');
+      this.el.emit('game-start');
+    },
+
+    // El primer auto que completa las vueltas gana: se detiene TODO y se muestran los resultados.
+    finishRace: function (winner) {
+      this.raceState = 'finished';
+      const elapsed = performance.now() - this.raceStartT;
+      this.el.emit('race-finish', { winner: winner.label });   // los autos se congelan al recibirlo
+
+      const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const cars = Array.from(document.querySelectorAll('[slot-car-controller]'))
+        .map((el) => el.components['slot-car-controller']).filter(Boolean)
+        .sort((a, b) => b.laps - a.laps);
+
+      document.getElementById('finish-winner').textContent = '🏁 Ganador: ' + winner.label;
+      document.getElementById('finish-stats').innerHTML = cars
+        .map((c) => '<li><span>' + esc(c.data.label) + '</span><span>' + c.laps + ' / ' + this.data.laps + ' vueltas</span></li>').join('');
+      const t = Math.max(0, elapsed) / 1000, m = Math.floor(t / 60);
+      document.getElementById('finish-time').textContent =
+        'Tiempo de carrera: ' + String(m).padStart(2, '0') + ':' + (t - m * 60).toFixed(1).padStart(4, '0');
+      this.finishEl.hidden = false;
+    },
+
+    // Reinicia el estado del juego sin volver a colocar la pista
+    restart: function () {
+      this.el.emit('game-reset');
+      this.el.emit('game-start');
+    }
+  });
+
+
+  /* =====================================================================
+   * COMPONENTE: engine-sound  (va en la misma entidad que slot-car-controller)
+   * ---------------------------------------------------------------------
+   * Conecta el motor sintetizado con el auto: cada ~30 ms lee su velocidad
+   * (la misma que muestra el velocímetro) y actualiza tono, brillo y volumen.
+   *   · Auto parado           -> zumbido grave de ralentí
+   *   · Acelerando            -> el tono y el volumen suben de forma suave y proporcional
+   *   · Soltando / frenando   -> bajan progresivamente
+   *   · Fuera de pista, carrera terminada o pista sin colocar -> motor apagado
+   * El audio solo se activa tras el primer gesto del usuario (ver GameAudio).
+   * ===================================================================== */
+  AFRAME.registerComponent('engine-sound', {
+    schema: {
+      volume:     { type: 'number', default: 1 },      // volumen general
+      pitch:      { type: 'number', default: 1 },      // multiplicador del tono
+      idleHz:     { type: 'number', default: 70 },     // tono en ralentí (Hz)
+      maxHz:      { type: 'number', default: 700 },    // tono a máxima velocidad (Hz)
+      idleVolume: { type: 'number', default: 0.07 },   // volumen en ralentí (0..1)
+      maxVolume:  { type: 'number', default: 0.40 },   // volumen a máxima velocidad (0..1)
+      brightness: { type: 'number', default: 3200 },   // brillo a máxima velocidad (Hz del filtro)
+      toggle:     { type: 'selector', default: '#sound-btn' }   // botón de silencio
+    },
+
+    init: function () {
+      this.last = 0;
+      this.synth = new EngineSynth(this.config());
+      GameAudio.arm();                       // espera el primer gesto; aún no crea ningún AudioContext
+      GameAudio.bindToggle(this.data.toggle);
+      this.synth.attach(GameAudio);          // construye el motor cuando el audio esté activo
+    },
+
+    update: function () {
+      if (this.synth) Object.assign(this.synth.cfg, this.config());   // permite ajustar el sonido en caliente
+    },
+
+    config: function () {
+      const d = this.data;
+      return { volume: d.volume, pitch: d.pitch, idleHz: d.idleHz, maxHz: d.maxHz,
+               idleGain: d.idleVolume, maxGain: d.maxVolume, maxCutoff: d.brightness };
+    },
+
+    tick: function (time) {
+      if (time - this.last < 30) return;     // ~33 actualizaciones por segundo
+      this.last = time;
+      const car = this.el.components['slot-car-controller'];
+      if (!car || !car.data) return;
+      const running = !!car.enabled && !car.finished && car.state === 'run';
+      this.synth.update(car.speed / car.data.maxSpeed, running);
+    },
+
+    remove: function () { this.synth.dispose(); }
+  });
+  </script>
+</body>
+</html>
