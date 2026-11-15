@@ -36,35 +36,35 @@ Slot Car AR · Realidades Extendidas y Experiencias Inmersivas · UGM · 2026
 Video del recorrido: https://...
 
 ### Abrir el enlace en ventana privada
-- Resultado: ...
-- Ajuste que hice: ...
+- Resultado: Funciona correctamente
 
 ### Dispositivo elegido
-- Resultado: ...
-- Ajuste que hice: ...
+- Resultado: En vertical, la camara esta muy cerca y no se ve la pista completa. En horizontal, la pista desaparece y la interfaz cubre la pantalla
+- Ajuste que hice: En vertical, voy a alejar la camara para que se vea la pista. En horizontal se esta revisando
 
 ### Interacciones, una por una
-- Resultado: ...
-- Ajuste que hice: ...
+- Resultado:
+  - El usuario revisa las descripciones en la interfaz
+  - El usuario presiona el boton "acelerar" y la carrera comienza
+  - El usuario llega a la curva final muy rapido y se sale de la pista
+  - Con cada vuelta, el usuario aprende el momento exacto para frenar
+- Ajuste que hice: Reduci el numero de vueltas a 15, ya que una vez el usuario se acostumbra a las curvas, la carrera se vuelve monotona
 
 ### Sonido con audífonos
-- Resultado: ...
-- Ajuste que hice: ...
+- Resultado: Funciona correctamente
 
 ### Fluidez del recorrido
-- Resultado: ...
-- Ajuste que hice: ...
+- Resultado: El usuario empieza la carrera y conforme avanza en ella, se va adaptando a la pista, cuando acelerar y cuando frenar
 
 ### Entrar como si fuera la primera vez
-- Resultado: ...
-- Ajuste que hice: ...
+- Resultado: El usuario revisa el lugar antes de presionar el boton, donde empieza la carrera. Algunos usuarion presional el boton, y otros usan la barra espaciadora.
 
 ## 6 · Uso de IA
 
 - Qué le pedí a la IA (herramienta y para qué).
-  - Utilize Claude para crear la base del codigo, implementando las mecanicas, los controladores, el rival y que ajustara el camino segun las indicaciones que puse en el modelo
+  - Utilize Claude para crear la base del codigo, implementando las mecanicas, los controladores, el rival, el sintetizador y que ajustara el camino segun las indicaciones que puse en el modelo
 - Qué hice yo y qué cambié de lo que me entregó.
-  - Yo cree los modelos usados en el prototipo y ajuste los datos como la velocidad, la aceleracion y la friccion para que se sintieran como slot cars cuando presionas el boton de aceleracion
+  - Yo cree los modelos usados en el prototipo y ajuste los datos como la velocidad, la aceleracion, la friccion y el agarre del auto para que se sintieran como slot cars cuando presionas el boton y lo sueltas, y que pasa cuando vaz muy rapido entrando a una curva
 
 ## 7 · Pendientes para el examen
 
