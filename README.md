@@ -33,7 +33,7 @@ Slot Car AR · Realidades Extendidas y Experiencias Inmersivas · UGM · 2026
 
 ## 5 · Testing
 
-Video del recorrido: https://...
+Video del recorrido: https://youtu.be/Pmt8wgBqABY
 
 ### Abrir el enlace en ventana privada
 - Resultado: Funciona correctamente
